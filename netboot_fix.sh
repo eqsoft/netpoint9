@@ -1,41 +1,65 @@
 #!/bin/bash
+#we need to run debian stretch
+#db grub-install-efi (or similar) fails if we use not the right version of debian
+#so we need to use a snapshot
+#http://snapshot.debian.org/archive/debian/20161124T211732Z/
+#to comment out use : null command
+#:<<'COMMENTEDOUT'
+#COMMENTEDOUT
 
-#setting up firewall rules and forwarding
+cp /etc/apt/sources.list /etc/apt/sources.list.pxe.bak
+trap 'echo "restoring apt sources"; rm /etc/apt/preferences; mv /etc/apt/sources.list.pxe.bak /etc/apt/sources.list;apt update;apt upgrade -y' INT TERM EXIT
 
-iptables -F INPUT
-iptables -F FORWARD
-iptables -F OUTPUT
-iptables -P INPUT ACCEPT
-iptables -P OUTPUT ACCEPT
-iptables -P FORWARD ACCEPT
+cat >/etc/apt/sources.list <<'EOF'
+deb  http://snapshot.debian.org/archive/debian/20161124T211732Z/ stretch main non-free contrib
+deb-src http://snapshot.debian.org/archive/debian/20161124T211732Z/ stretch main non-free contrib
 
-echo 1 > /proc/sys/net/ipv4/ip_forward
-INET="wlp3s0"
-INETIP="$(ifconfig $INET | sed -n '/inet /{s/.*inet //;s/ .*//;p}')"
-iptables -t nat -A POSTROUTING -o $INET -j SNAT --to-source $INETIP
-sudo apt install dnsmasq
-
-if [ ! -f /etc/dnsmasq.conf ]; then cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak;fi
-
-cat >/etc/dnsmasq.conf <<EOF
-interface=enp0s25
-dhcp-range=192.168.2.100,192.168.2.150,255.255.255.0,12h
-dhcp-boot=pxelinux.0,pxeserver,192.168.2.10
-enable-tftp
-tftp-root=/srv/tftpboot
+deb http://snapshot.debian.org/archive/debian-security/20161124T211732Z/ stretch/updates main contrib non-free
+deb-src http://snapshot.debian.org/archive/debian-security/20161124T211732Z/ stretch/updates main contrib non-free
 EOF
 
-echo give network static ip 192.168.2.10
-echo but do not set gateway
-
-service dnsmasq restart
-
-#now we setup nfs
-apt install nfs-kernel-server
-
-if [ ! -f /etc/exports ]; then cp /etc/exports /etc/exports.bak;fi
-cat >/etc/exports <<'EOF'
-/srv/debian-live *(ro,async,no_root_squash,no_subtree_check)	
+cat >/etc/apt/preferences <<'EOF'
+Package: *
+Pin: origin "snapshot.debian.org"
+Pin-Priority: 1001
 EOF
+apt-get -o Acquire::Check-Valid-Until=false update
+apt upgrade -f -y --allow-downgrades
 
-exportfs -rv
+
+apt install live-build live-config live-boot whois squashfs-tools git -y
+git clone https://github.com/eqsoft/netpoint9
+cd netpoint9
+cp config.net  auto/config 
+cat >auto/config <<'EOF'
+#!/bin/sh
+
+set -e
+
+lb config noauto \
+	--architecture "i386" \
+    --linux-flavours "686-pae" \
+    --distribution "stretch" \
+	--memtest "none" \
+	--binary-images "netboot" \
+	--bootappend-live "boot=live noeject debug net.ifnames=0 biosdevname=0 locales=de_DE.UTF-8 keyboard-layouts=de username=npuser xpanel=1 xbrowser=seb2 xbrowseropts=-purgecaches,debug,1 xnoblank=1 netboot=nfs nfsroot=192.168.2.10:/srv/debian-live" \
+	--debootstrap-options "--variant=minbase" \
+	--archive-areas "main contrib non-free" \
+	--apt-recommends "false" \
+	--apt-indices "false" \
+	"${@}"
+EOF
+#change default webpage
+sed -i "/lockPref(\"browser.startup.homepage\",\"/c\lockPref(\"browser.startup.homepage\",\"http://192.168.2.10/\");" ./config/includes.chroot/etc/firefox-esr/firefox-esr.js
+sed -i "/\"startURL\":\"/c\"startURL\":\"http://192.168.2.10\"," ./config/includes.chroot/etc/seb2/config.json
+#set timeout to 0.1 sec
+sed -i "/timeout /c\timeout 1" ./config/bootloaders/pxelinux/pxelinux.cfg/default
+
+#now building the tar file
+./build.sh
+mkdir /srv
+tar xf live-image-i386.netboot.tar -C /srv
+
+
+#restoring to new debian version
+echo "restoring apt sources"; rm /etc/apt/preferences;mv /etc/apt/sources.list.pxe.bak /etc/apt/sources.list;apt update;apt upgrade -y
