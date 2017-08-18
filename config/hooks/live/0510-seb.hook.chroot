@@ -47,5 +47,15 @@ then
 	rm -r eqsoft-seb2-*
 	rm -r browser/bin
 fi
+# fetch latest libflashplayer.so for firefox (plugin NPAPI)
+
+if [ ! -d "/usr/lib/firefox-esr/browser/plugins" ] 
+then
+        mkdir -p /usr/lib/firefox-esr/browser/plugins
+        cd  /usr/lib/firefox-esr/browser/plugins
+        wget  https://fpdownload.macromedia.com/pub/labs/flashruntimes/flashplayer/linux64/libflashplayer.so
+        chmod 755 libflashplayer.so
+fi
+
 
 exit 0
